@@ -15,13 +15,14 @@ st.set_page_config(page_title="Student Tracker Pro", page_icon="🎓", layout="w
 @st.cache_resource
 def init_gsheets():
     try:
-        # Baca rahsia dari Streamlit Cloud
-        creds_dict = json.loads(st.secrets["google_json"])
+        raw_json = st.secrets["google_json"]
+        # KUNCI PENYELESAIAN ERROR: strict=False membenarkan sistem membaca karakter tersembunyi \n
+        creds_dict = json.loads(raw_json, strict=False)
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"⚠️ Ralat Database: Pastikan fail JSON di Streamlit Secrets betul. ({e})")
+        st.error(f"⚠️ Ralat Database: {e}")
         return None
 
 client = init_gsheets()
@@ -37,11 +38,10 @@ def load_tasks():
             records = ws.get_all_records()
             if records:
                 df = pd.DataFrame(records)
-                # Tukar perkataan 'True/False' balik ke bentuk kotak tick (boolean)
                 df['Status'] = df['Status'].astype(str).str.lower() == 'true'
                 return df
         except Exception as e:
-            pass # Kalau gagal, dia akan guna memori sementara
+            pass 
     return pd.DataFrame(columns=cols)
 
 # Fungsi Simpan Data ke Google Sheets
@@ -49,7 +49,7 @@ def save_tasks(df):
     if client:
         try:
             df_clean = df.copy()
-            df_clean['Status'] = df_clean['Status'].astype(str) # Google sheets suka format teks
+            df_clean['Status'] = df_clean['Status'].astype(str) 
             df_clean = df_clean.fillna("").astype(str)
             
             sheet = client.open(DB_NAME)
@@ -61,7 +61,7 @@ def save_tasks(df):
 
 # --- INITIALIZE SESSION STATE ---
 if 'tasks' not in st.session_state:
-    st.session_state.tasks = load_tasks() # SEKARANG DIA TARIK DARI DATABASE!
+    st.session_state.tasks = load_tasks() 
 
 if 'scholarships' not in st.session_state:
     st.session_state.scholarships = pd.DataFrame([{"Scholarship Name": "Yayasan Telekom Malaysia (YTM)", "Bond": "Yes", "Due Date": datetime.date(2026, 4, 30), "App Status": "Application Submitted", "Result": "Interview Stage"}])
@@ -102,7 +102,7 @@ if page_selection == "🏠 Main Dashboard":
         "Kejayaan bukan pecutan, ia macam larian half marathon. Pace yourself, keep breathing, and stay consistent. 🏃‍♂️",
         "Debugging AI models boleh buat pening, tapi ingat wajah gembira Mak dan Ayah bila tengok result kau nanti. 💻",
         "Setiap baris kod yang disiapkan dan setiap botol sambal ikan bilis yang terjual adalah langkah ke arah kebebasan kewangan. 🌶️",
-        "Bila rasa burnout, ingat balik kenapa kau mula. Banggakan Atok, Along, Hajar, Hawa, Majid, dan Amri! 👨‍👩‍👧‍👦",
+        "Bila rasa burnout, ingat balik kenapa kau mula. Banggakan Atok, Along, Mak, Ayah dan family! 👨‍👩‍👧‍👦",
         "The best way to predict the future is to create it. Teruskan pulun degree kat UTM ni! 🎓"
     ]
     today_quote = quotes[datetime.date.today().timetuple().tm_yday % len(quotes)]
@@ -157,13 +157,12 @@ if page_selection == "🏠 Main Dashboard":
         st.session_state.quick_notes = new_note
         st.toast("Note auto-saved!", icon="🐱")
 
-# --- 2. TO-DO LIST (KINI BERSAMBUNG DENGAN GOOGLE SHEETS) ---
+# --- 2. TO-DO LIST ---
 elif page_selection == "📝 To-Do List":
     st.title("📝 Daily Tasks")
     
-    # Bila server berjaya connect, tunjuk indicator hijau
-    if client: st.caption("🟢 Bersambung dengan Google Sheets")
-    else: st.caption("🔴 Gagal bersambung dengan Google Sheets (Mod Offline)")
+    if client: st.caption("🟢 Connected to Google Sheets Database")
+    else: st.caption("🔴 Offline Mode (Not saved to Google Sheets)")
 
     with st.expander("➕ Add New Task", expanded=False):
         with st.form("new_task_form", clear_on_submit=True):
@@ -178,8 +177,6 @@ elif page_selection == "📝 To-Do List":
             if st.form_submit_button("Add Task") and task_name:
                 new_task = pd.DataFrame([{"Status": False, "Task": task_name, "Subject": subject_name, "Deadline": deadline, "Priority": priority, "Notes": notes}])
                 st.session_state.tasks = pd.concat([st.session_state.tasks, new_task], ignore_index=True)
-                
-                # SINKRONISASI KE DATABASE!
                 save_tasks(st.session_state.tasks) 
                 st.success("Task added and saved to Database successfully!")
 
@@ -194,18 +191,15 @@ elif page_selection == "📝 To-Do List":
             else: return "🟢 Chill"
         display_df.insert(1, "Urgency", display_df["Deadline"].apply(get_urgency))
         
-        # Kesan kalau ada perubahan status Checkbox
         edited_df = st.data_editor(display_df, column_config={"Status": st.column_config.CheckboxColumn("Done?", default=False)}, disabled=["Urgency", "Task", "Subject", "Deadline", "Priority", "Notes"], hide_index=True, use_container_width=True)
         clean_edited_df = edited_df.drop(columns=["Urgency"])
         
-        # SINKRONISASI KE DATABASE JIKA DI-EDIT!
         if not clean_edited_df.equals(st.session_state.tasks):
             st.session_state.tasks = clean_edited_df
             save_tasks(st.session_state.tasks)
 
         if st.button("🧹 Clear Completed Tasks"):
             st.session_state.tasks = st.session_state.tasks[st.session_state.tasks["Status"] == False]
-            # SINKRONISASI KE DATABASE SELEPAS PADAM!
             save_tasks(st.session_state.tasks) 
             st.rerun()
 
@@ -324,12 +318,12 @@ elif page_selection == "🎓 Scholarship Tracker":
                             st.balloons()
                             try: st.image("cat_party.png", width=200)
                             except: pass
-                            msgs = [f"🎉 ALHAMDULILLAH! Your hard work paid off for {name}!", f"🔥 Awesome! {name} secured. Time to celebrate with Along, Hajar, Hawa, Majid, and Amri!", f"🌟 Atok must be so proud of you getting {name}. Keep moving forward!"]
+                            msgs = [f"🎉 ALHAMDULILLAH! Your hard work paid off for {name}!", f"🔥 Awesome! {name} secured. Time to celebrate with family!", f"🌟 Atok must be so proud of you getting {name}. Keep moving forward!"]
                             st.success(random.choice(msgs))
                         elif new_res == "Unsuccessful":
                             try: st.image("cat_support.png", width=200)
                             except: pass
-                            st.info(f"💪 Don't be discouraged. Missing out on {name} just means something better is coming. Mak and Ayah are always praying for your success.")
+                            st.info(f"💪 Don't be discouraged. Missing out on {name} just means something better is coming.")
                 except IndexError: pass
         st.session_state.scholarships = edited_sch_df
 
