@@ -10,6 +10,36 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Student Tracker Pro", page_icon="🎓", layout="wide")
 
 # ==========================================
+# --- SISTEM LOGIN (GATEKEEPER) ---
+# ==========================================
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("🔒 Security Check")
+        st.write("Sila masukkan kata laluan untuk mengakses Student Tracker Pro.")
+        
+        with st.form("login_form"):
+            password = st.text_input("Kata Laluan", type="password")
+            submit = st.form_submit_button("Log Masuk")
+            
+            if submit:
+                try:
+                    # Dia akan check password ni dengan apa yang kau set kat Streamlit Secrets
+                    if password == st.secrets["app_password"]:
+                        st.session_state.logged_in = True
+                        st.rerun()
+                    else:
+                        st.error("❌ Kata laluan salah! Cuba lagi.")
+                except KeyError:
+                    st.error("⚠️ Sila set 'app_password' di dalam Streamlit Secrets terlebih dahulu.")
+    
+    # st.stop() ni penting gila. Dia akan 'matikan' kod kat bawah dari berjalan selagi tak login.
+    st.stop() 
+
+# ==========================================
 # --- GOOGLE SHEETS DATABASE CONNECTION ---
 # ==========================================
 @st.cache_resource
@@ -35,7 +65,6 @@ def load_data(ws_name, cols, bool_cols=[], float_cols=[]):
             try:
                 ws = sheet.worksheet(ws_name)
             except gspread.exceptions.WorksheetNotFound:
-                # Kalau tab tak wujud, buat baru automatik!
                 ws = sheet.add_worksheet(title=ws_name, rows="100", cols=str(len(cols)))
                 ws.update(range_name="A1", values=[cols])
                 return df
@@ -46,7 +75,6 @@ def load_data(ws_name, cols, bool_cols=[], float_cols=[]):
         except Exception as e:
             pass
             
-    # Formatkan jenis data supaya tak berlaku ralat matematik
     for c in bool_cols:
         if c in df.columns: df[c] = df[c].astype(str).str.lower() == 'true'
     for c in float_cols:
@@ -56,7 +84,6 @@ def load_data(ws_name, cols, bool_cols=[], float_cols=[]):
         if c not in df.columns: df[c] = ""
     return df[cols]
 
-# Fungsi Simpan Data ke Google Sheets
 def save_data(ws_name, df):
     if client and not df.empty:
         try:
@@ -75,11 +102,9 @@ if 'scholarships' not in st.session_state:
     st.session_state.scholarships = load_data("Scholarships", ["Scholarship Name", "Bond", "Due Date", "App Status", "Result"])
 if 'cgpa_data' not in st.session_state:
     st.session_state.cgpa_data = load_data("CGPA", ["Semester", "Code", "Subject", "Credit", "Grade", "Pointer"], float_cols=["Pointer"], bool_cols=[])
-    # Betulkan format jam kredit selepas load dari database
     if not st.session_state.cgpa_data.empty:
         st.session_state.cgpa_data['Credit'] = pd.to_numeric(st.session_state.cgpa_data['Credit'], errors='coerce').fillna(0).astype(int)
 
-# Load Targets khas
 if 'sem_targets' not in st.session_state:
     df_targets = load_data("Targets", ["Semester", "Subjects", "Credits"])
     targets_dict = {}
@@ -108,6 +133,12 @@ except: pass
 st.sidebar.title("Navigation Menu")
 page_selection = st.sidebar.radio("Go to:", ["🏠 Main Dashboard", "📝 To-Do List", "👥 Project Manager", "💰 Financial Tracker", "📅 Class Schedule", "💡 Quick Notes", "🎓 Scholarship Tracker", "📊 CGPA Tracker"])
 
+st.sidebar.markdown("---")
+# BUTANG LOGOUT
+if st.sidebar.button("🚪 Log Keluar (Logout)"):
+    st.session_state.logged_in = False
+    st.rerun()
+
 # --- 1. MAIN DASHBOARD ---
 if page_selection == "🏠 Main Dashboard":
     col_header1, col_header2 = st.columns([3, 1])
@@ -122,7 +153,7 @@ if page_selection == "🏠 Main Dashboard":
         "Kejayaan bukan pecutan, ia macam larian half marathon. Pace yourself, keep breathing, and stay consistent. 🏃‍♂️",
         "Debugging AI models boleh buat pening, tapi ingat wajah gembira Mak dan Ayah bila tengok result kau nanti. 💻",
         "Setiap baris kod yang disiapkan dan setiap botol sambal ikan bilis yang terjual adalah langkah ke arah kebebasan kewangan. 🌶️",
-        "Bila rasa burnout, ingat balik kenapa kau mula. Banggakan Atok, Along, Hajar, Hawa, Majid, dan Amri! 👨‍👩‍👧‍👦",
+        "Bila rasa burnout, ingat balik kenapa kau mula. Banggakan keluarga! 👨‍👩‍👧‍👦",
         "The best way to predict the future is to create it. Teruskan pulun degree kat UTM ni! 🎓"
     ]
     today_quote = quotes[datetime.date.today().timetuple().tm_yday % len(quotes)]
@@ -162,9 +193,6 @@ if page_selection == "🏠 Main Dashboard":
         st.write("Urgent tasks (due within 3 days):")
         if not st.session_state.tasks.empty:
             active_tasks = st.session_state.tasks[st.session_state.tasks["Status"] == False].copy()
-            
-            # KOD YANG TELAH DIBETULKAN UNTUK ERROR SEBELUM NI!
-            # pd.to_datetime menukar teks ke format tarikh sebenar secara paksa
             active_tasks['Deadline_Date'] = pd.to_datetime(active_tasks['Deadline'], errors='coerce').dt.date
             today_date = datetime.date.today()
             active_tasks['Days Left'] = active_tasks['Deadline_Date'].apply(lambda x: (x - today_date).days if pd.notnull(x) else 99)
@@ -381,8 +409,6 @@ elif page_selection == "📊 CGPA Tracker":
             t_cred = c_t2.number_input("Total Credit Hours this semester?", min_value=1, step=1)
             if st.form_submit_button("Confirm Initialization"):
                 st.session_state.sem_targets[current_sem] = {"subjects": t_sub, "credits": t_cred}
-                
-                # Convert dict to df & save
                 df_targets = pd.DataFrame.from_dict(st.session_state.sem_targets, orient='index').reset_index().rename(columns={'index':'Semester'})
                 save_data("Targets", df_targets)
                 st.rerun()
