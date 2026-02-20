@@ -27,7 +27,6 @@ if not st.session_state.logged_in:
             
             if submit:
                 try:
-                    # Dia akan check password ni dengan apa yang kau set kat Streamlit Secrets
                     if password == st.secrets["app_password"]:
                         st.session_state.logged_in = True
                         st.rerun()
@@ -36,7 +35,6 @@ if not st.session_state.logged_in:
                 except KeyError:
                     st.error("⚠️ Sila set 'app_password' di dalam Streamlit Secrets terlebih dahulu.")
     
-    # st.stop() ni penting gila. Dia akan 'matikan' kod kat bawah dari berjalan selagi tak login.
     st.stop() 
 
 # ==========================================
@@ -56,7 +54,6 @@ def init_gsheets():
 client = init_gsheets()
 DB_NAME = "StudentTracker_DB"
 
-# FUNGSI MAGIK: Load & Auto-Create Tab di Google Sheets
 def load_data(ws_name, cols, bool_cols=[], float_cols=[]):
     df = pd.DataFrame(columns=cols)
     if client:
@@ -110,7 +107,15 @@ if 'sem_targets' not in st.session_state:
     targets_dict = {}
     if not df_targets.empty:
         for idx, row in df_targets.iterrows():
-            targets_dict[row["Semester"]] = {"subjects": int(row["Subjects"]), "credits": int(row["Credits"])}
+            # PENAPIS KEBAL: Pastikan semester wujud dan abaikan nilai kosong (Fix untuk ralat ValueError tadi)
+            sem = str(row["Semester"]).strip()
+            if sem:
+                try:
+                    sub = int(row["Subjects"]) if str(row["Subjects"]).strip() != "" else 0
+                    cred = int(row["Credits"]) if str(row["Credits"]).strip() != "" else 0
+                    targets_dict[sem] = {"subjects": sub, "credits": cred}
+                except ValueError:
+                    pass
     st.session_state.sem_targets = targets_dict
 
 if 'assignments' not in st.session_state:
@@ -134,7 +139,6 @@ st.sidebar.title("Navigation Menu")
 page_selection = st.sidebar.radio("Go to:", ["🏠 Main Dashboard", "📝 To-Do List", "👥 Project Manager", "💰 Financial Tracker", "📅 Class Schedule", "💡 Quick Notes", "🎓 Scholarship Tracker", "📊 CGPA Tracker"])
 
 st.sidebar.markdown("---")
-# BUTANG LOGOUT
 if st.sidebar.button("🚪 Log Keluar (Logout)"):
     st.session_state.logged_in = False
     st.rerun()
@@ -153,7 +157,7 @@ if page_selection == "🏠 Main Dashboard":
         "Kejayaan bukan pecutan, ia macam larian half marathon. Pace yourself, keep breathing, and stay consistent. 🏃‍♂️",
         "Debugging AI models boleh buat pening, tapi ingat wajah gembira Mak dan Ayah bila tengok result kau nanti. 💻",
         "Setiap baris kod yang disiapkan dan setiap botol sambal ikan bilis yang terjual adalah langkah ke arah kebebasan kewangan. 🌶️",
-        "Bila rasa burnout, ingat balik kenapa kau mula. Banggakan keluarga! 👨‍👩‍👧‍👦",
+        "Bila rasa burnout, ingat balik kenapa kau mula. Banggakan Atok, Along, Hajar, Hawa, Majid, dan Amri! 👨‍👩‍👧‍👦",
         "The best way to predict the future is to create it. Teruskan pulun degree kat UTM ni! 🎓"
     ]
     today_quote = quotes[datetime.date.today().timetuple().tm_yday % len(quotes)]
