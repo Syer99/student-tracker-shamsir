@@ -16,65 +16,85 @@ st.set_page_config(page_title="Student Tracker Pro", page_icon="🎓", layout="w
 def init_gsheets():
     try:
         raw_json = st.secrets["google_json"]
-        # KUNCI PENYELESAIAN ERROR: strict=False membenarkan sistem membaca karakter tersembunyi \n
         creds_dict = json.loads(raw_json, strict=False)
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"⚠️ Ralat Database: {e}")
         return None
 
 client = init_gsheets()
 DB_NAME = "StudentTracker_DB"
 
-# Fungsi Tarik Data dari Google Sheets
-def load_tasks():
-    cols = ["Status", "Task", "Subject", "Deadline", "Priority", "Notes"]
+# FUNGSI MAGIK: Load & Auto-Create Tab di Google Sheets
+def load_data(ws_name, cols, bool_cols=[], float_cols=[]):
+    df = pd.DataFrame(columns=cols)
     if client:
         try:
             sheet = client.open(DB_NAME)
-            ws = sheet.worksheet("To_Do_List")
+            try:
+                ws = sheet.worksheet(ws_name)
+            except gspread.exceptions.WorksheetNotFound:
+                # Kalau tab tak wujud, buat baru automatik!
+                ws = sheet.add_worksheet(title=ws_name, rows="100", cols=str(len(cols)))
+                ws.update(range_name="A1", values=[cols])
+                return df
+            
             records = ws.get_all_records()
             if records:
                 df = pd.DataFrame(records)
-                df['Status'] = df['Status'].astype(str).str.lower() == 'true'
-                return df
         except Exception as e:
-            pass 
-    return pd.DataFrame(columns=cols)
+            pass
+            
+    # Formatkan jenis data supaya tak berlaku ralat matematik
+    for c in bool_cols:
+        if c in df.columns: df[c] = df[c].astype(str).str.lower() == 'true'
+    for c in float_cols:
+        if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
+            
+    for c in cols:
+        if c not in df.columns: df[c] = ""
+    return df[cols]
 
 # Fungsi Simpan Data ke Google Sheets
-def save_tasks(df):
-    if client:
+def save_data(ws_name, df):
+    if client and not df.empty:
         try:
-            df_clean = df.copy()
-            df_clean['Status'] = df_clean['Status'].astype(str) 
-            df_clean = df_clean.fillna("").astype(str)
-            
+            df_clean = df.copy().fillna("").astype(str)
             sheet = client.open(DB_NAME)
-            ws = sheet.worksheet("To_Do_List")
+            ws = sheet.worksheet(ws_name)
             ws.clear()
-            ws.update(values=[df_clean.columns.values.tolist()] + df_clean.values.tolist())
+            ws.update(range_name="A1", values=[df_clean.columns.values.tolist()] + df_clean.values.tolist())
         except Exception as e:
-            st.error(f"Gagal simpan ke database: {e}")
+            pass
 
-# --- INITIALIZE SESSION STATE ---
+# --- INITIALIZE SEMUA DATABASE ---
 if 'tasks' not in st.session_state:
-    st.session_state.tasks = load_tasks() 
-
+    st.session_state.tasks = load_data("To_Do_List", ["Status", "Task", "Subject", "Deadline", "Priority", "Notes"], bool_cols=["Status"])
 if 'scholarships' not in st.session_state:
-    st.session_state.scholarships = pd.DataFrame([{"Scholarship Name": "Yayasan Telekom Malaysia (YTM)", "Bond": "Yes", "Due Date": datetime.date(2026, 4, 30), "App Status": "Application Submitted", "Result": "Interview Stage"}])
+    st.session_state.scholarships = load_data("Scholarships", ["Scholarship Name", "Bond", "Due Date", "App Status", "Result"])
 if 'cgpa_data' not in st.session_state:
-    st.session_state.cgpa_data = pd.DataFrame(columns=["Semester", "Code", "Subject", "Credit", "Grade", "Pointer"])
+    st.session_state.cgpa_data = load_data("CGPA", ["Semester", "Code", "Subject", "Credit", "Grade", "Pointer"], float_cols=["Pointer"], bool_cols=[])
+    # Betulkan format jam kredit selepas load dari database
+    if not st.session_state.cgpa_data.empty:
+        st.session_state.cgpa_data['Credit'] = pd.to_numeric(st.session_state.cgpa_data['Credit'], errors='coerce').fillna(0).astype(int)
+
+# Load Targets khas
 if 'sem_targets' not in st.session_state:
-    st.session_state.sem_targets = {}
+    df_targets = load_data("Targets", ["Semester", "Subjects", "Credits"])
+    targets_dict = {}
+    if not df_targets.empty:
+        for idx, row in df_targets.iterrows():
+            targets_dict[row["Semester"]] = {"subjects": int(row["Subjects"]), "credits": int(row["Credits"])}
+    st.session_state.sem_targets = targets_dict
+
 if 'assignments' not in st.session_state:
-    st.session_state.assignments = pd.DataFrame([{"Project Name": "Fleet Management System Case Study", "Subject": "Artificial Intelligence", "Team Members": "Shamsir, Member 1, Member 2", "Status": "In Progress", "Due Date": datetime.date.today() + datetime.timedelta(days=14)}])
+    st.session_state.assignments = load_data("Assignments", ["Project Name", "Subject", "Team Members", "Status", "Due Date"])
 if 'finances' not in st.session_state:
-    st.session_state.finances = pd.DataFrame([{"Date": datetime.date.today(), "Type": "Income", "Category": "Business", "Amount": 250.00, "Description": "Sambal Ikan Bilis Sales"}])
+    st.session_state.finances = load_data("Finances", ["Date", "Type", "Category", "Amount", "Description"], float_cols=["Amount"])
 if 'schedule' not in st.session_state:
-    st.session_state.schedule = pd.DataFrame(columns=["Day", "Time", "Subject", "Location"])
+    st.session_state.schedule = load_data("Schedule", ["Day", "Time", "Subject", "Location"])
+
 if 'exam_date' not in st.session_state:
     st.session_state.exam_date = datetime.date.today() + datetime.timedelta(days=60)
 if 'quick_notes' not in st.session_state:
@@ -102,7 +122,7 @@ if page_selection == "🏠 Main Dashboard":
         "Kejayaan bukan pecutan, ia macam larian half marathon. Pace yourself, keep breathing, and stay consistent. 🏃‍♂️",
         "Debugging AI models boleh buat pening, tapi ingat wajah gembira Mak dan Ayah bila tengok result kau nanti. 💻",
         "Setiap baris kod yang disiapkan dan setiap botol sambal ikan bilis yang terjual adalah langkah ke arah kebebasan kewangan. 🌶️",
-        "Bila rasa burnout, ingat balik kenapa kau mula. Banggakan Atok, Along, Mak, Ayah dan family! 👨‍👩‍👧‍👦",
+        "Bila rasa burnout, ingat balik kenapa kau mula. Banggakan Atok, Along, Hajar, Hawa, Majid, dan Amri! 👨‍👩‍👧‍👦",
         "The best way to predict the future is to create it. Teruskan pulun degree kat UTM ni! 🎓"
     ]
     today_quote = quotes[datetime.date.today().timetuple().tm_yday % len(quotes)]
@@ -136,13 +156,21 @@ if page_selection == "🏠 Main Dashboard":
         st.write("📈 **Cashflow (In vs Out)**")
         if not st.session_state.finances.empty: st.bar_chart(st.session_state.finances.groupby("Type")["Amount"].sum(), color="#253A82")
         else: st.write("No data yet.")
+    
     with col_g3:
         st.subheader("🔥 Today's Focus")
         st.write("Urgent tasks (due within 3 days):")
         if not st.session_state.tasks.empty:
             active_tasks = st.session_state.tasks[st.session_state.tasks["Status"] == False].copy()
-            active_tasks['Days Left'] = (pd.to_datetime(active_tasks['Deadline']).dt.date - datetime.date.today()).dt.days
+            
+            # KOD YANG TELAH DIBETULKAN UNTUK ERROR SEBELUM NI!
+            # pd.to_datetime menukar teks ke format tarikh sebenar secara paksa
+            active_tasks['Deadline_Date'] = pd.to_datetime(active_tasks['Deadline'], errors='coerce').dt.date
+            today_date = datetime.date.today()
+            active_tasks['Days Left'] = active_tasks['Deadline_Date'].apply(lambda x: (x - today_date).days if pd.notnull(x) else 99)
+            
             urgent_tasks = active_tasks[active_tasks['Days Left'] <= 3]
+            
             if not urgent_tasks.empty:
                 for index, row in urgent_tasks.iterrows():
                     days_text = "Today!" if row['Days Left'] == 0 else f"{row['Days Left']} days left"
@@ -160,10 +188,8 @@ if page_selection == "🏠 Main Dashboard":
 # --- 2. TO-DO LIST ---
 elif page_selection == "📝 To-Do List":
     st.title("📝 Daily Tasks")
-    
     if client: st.caption("🟢 Connected to Google Sheets Database")
-    else: st.caption("🔴 Offline Mode (Not saved to Google Sheets)")
-
+    
     with st.expander("➕ Add New Task", expanded=False):
         with st.form("new_task_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
@@ -177,30 +203,32 @@ elif page_selection == "📝 To-Do List":
             if st.form_submit_button("Add Task") and task_name:
                 new_task = pd.DataFrame([{"Status": False, "Task": task_name, "Subject": subject_name, "Deadline": deadline, "Priority": priority, "Notes": notes}])
                 st.session_state.tasks = pd.concat([st.session_state.tasks, new_task], ignore_index=True)
-                save_tasks(st.session_state.tasks) 
+                save_data("To_Do_List", st.session_state.tasks) 
                 st.success("Task added and saved to Database successfully!")
 
     if not st.session_state.tasks.empty:
         display_df = st.session_state.tasks.copy()
         today = datetime.date.today()
         def get_urgency(date_val):
-            days_left = (pd.to_datetime(date_val).date() - today).days
-            if days_left < 0: return "🚨 Overdue"
-            elif days_left <= 3: return "🔴 Urgent"
-            elif days_left <= 7: return "🟡 Soon"
-            else: return "🟢 Chill"
+            try:
+                days_left = (pd.to_datetime(date_val).date() - today).days
+                if days_left < 0: return "🚨 Overdue"
+                elif days_left <= 3: return "🔴 Urgent"
+                elif days_left <= 7: return "🟡 Soon"
+                else: return "🟢 Chill"
+            except: return "🟢 Chill"
+                
         display_df.insert(1, "Urgency", display_df["Deadline"].apply(get_urgency))
-        
         edited_df = st.data_editor(display_df, column_config={"Status": st.column_config.CheckboxColumn("Done?", default=False)}, disabled=["Urgency", "Task", "Subject", "Deadline", "Priority", "Notes"], hide_index=True, use_container_width=True)
         clean_edited_df = edited_df.drop(columns=["Urgency"])
         
         if not clean_edited_df.equals(st.session_state.tasks):
             st.session_state.tasks = clean_edited_df
-            save_tasks(st.session_state.tasks)
+            save_data("To_Do_List", st.session_state.tasks)
 
         if st.button("🧹 Clear Completed Tasks"):
             st.session_state.tasks = st.session_state.tasks[st.session_state.tasks["Status"] == False]
-            save_tasks(st.session_state.tasks) 
+            save_data("To_Do_List", st.session_state.tasks) 
             st.rerun()
 
 # --- 3. PROJECT MANAGER ---
@@ -218,10 +246,14 @@ elif page_selection == "👥 Project Manager":
             if st.form_submit_button("Add Project") and proj_name:
                 new_proj = pd.DataFrame([{"Project Name": proj_name, "Subject": subj_name, "Team Members": members, "Status": "Not Started", "Due Date": due_date}])
                 st.session_state.assignments = pd.concat([st.session_state.assignments, new_proj], ignore_index=True)
+                save_data("Assignments", st.session_state.assignments)
                 st.success("Project added successfully!")
     if not st.session_state.assignments.empty:
+        old_ass = st.session_state.assignments.copy()
         edited_proj = st.data_editor(st.session_state.assignments, column_config={"Status": st.column_config.SelectboxColumn("Progress", options=["Not Started", "In Progress", "Completed"], required=True)}, hide_index=True, use_container_width=True)
-        st.session_state.assignments = edited_proj
+        if not old_ass.equals(edited_proj):
+            st.session_state.assignments = edited_proj
+            save_data("Assignments", st.session_state.assignments)
 
 # --- 4. FINANCIAL TRACKER ---
 elif page_selection == "💰 Financial Tracker":
@@ -237,6 +269,7 @@ elif page_selection == "💰 Financial Tracker":
             if st.form_submit_button("Record Transaction") and f_amt > 0:
                 new_fin = pd.DataFrame([{"Date": f_date, "Type": f_type, "Category": f_cat, "Amount": f_amt, "Description": f_desc}])
                 st.session_state.finances = pd.concat([st.session_state.finances, new_fin], ignore_index=True)
+                save_data("Finances", st.session_state.finances)
                 st.success("Transaction recorded!")
     with tab1:
         if not st.session_state.finances.empty:
@@ -268,9 +301,14 @@ elif page_selection == "📅 Class Schedule":
                 if st.form_submit_button("Add Class"):
                     new_c = pd.DataFrame([{"Day": c_day, "Time": c_time, "Subject": c_sub, "Location": c_loc}])
                     st.session_state.schedule = pd.concat([st.session_state.schedule, new_c], ignore_index=True)
+                    save_data("Schedule", st.session_state.schedule)
                     st.rerun()
         if not st.session_state.schedule.empty:
             st.dataframe(st.session_state.schedule, hide_index=True, use_container_width=True)
+            if st.button("Kosongkan Jadual"):
+                st.session_state.schedule = pd.DataFrame(columns=["Day", "Time", "Subject", "Location"])
+                save_data("Schedule", st.session_state.schedule)
+                st.rerun()
     with col2:
         st.write("### ⏳ Exam Countdown")
         new_exam = st.date_input("Set Final Exam Date", value=st.session_state.exam_date)
@@ -304,6 +342,7 @@ elif page_selection == "🎓 Scholarship Tracker":
             if st.form_submit_button("Add Record") and sch_name:
                 new_sch = pd.DataFrame([{"Scholarship Name": sch_name, "Bond": bond_status, "Due Date": due_date, "App Status": app_status, "Result": sch_result}])
                 st.session_state.scholarships = pd.concat([st.session_state.scholarships, new_sch], ignore_index=True)
+                save_data("Scholarships", st.session_state.scholarships)
                 st.success("Record added!")
     if not st.session_state.scholarships.empty:
         old_df = st.session_state.scholarships.copy()
@@ -318,20 +357,22 @@ elif page_selection == "🎓 Scholarship Tracker":
                             st.balloons()
                             try: st.image("cat_party.png", width=200)
                             except: pass
-                            msgs = [f"🎉 ALHAMDULILLAH! Your hard work paid off for {name}!", f"🔥 Awesome! {name} secured. Time to celebrate with family!", f"🌟 Atok must be so proud of you getting {name}. Keep moving forward!"]
+                            msgs = [f"🎉 ALHAMDULILLAH! Your hard work paid off for {name}!", f"🔥 Awesome! {name} secured. Time to celebrate!", f"🌟 Atok must be so proud of you getting {name}. Keep moving forward!"]
                             st.success(random.choice(msgs))
                         elif new_res == "Unsuccessful":
                             try: st.image("cat_support.png", width=200)
                             except: pass
                             st.info(f"💪 Don't be discouraged. Missing out on {name} just means something better is coming.")
                 except IndexError: pass
-        st.session_state.scholarships = edited_sch_df
+            st.session_state.scholarships = edited_sch_df
+            save_data("Scholarships", st.session_state.scholarships)
 
 # --- 8. CGPA TRACKER ---
 elif page_selection == "📊 CGPA Tracker":
     st.title("📊 Academic Performance")
     current_sem = st.selectbox("Select Semester:", ["Semester 1", "Semester 2", "Semester 3", "Semester 4", "Semester 5", "Semester 6", "Semester 7", "Semester 8"])
     st.markdown("---")
+    
     if current_sem not in st.session_state.sem_targets:
         st.warning(f"Initialization required for {current_sem}.")
         with st.form(f"target_form_{current_sem}"):
@@ -340,6 +381,10 @@ elif page_selection == "📊 CGPA Tracker":
             t_cred = c_t2.number_input("Total Credit Hours this semester?", min_value=1, step=1)
             if st.form_submit_button("Confirm Initialization"):
                 st.session_state.sem_targets[current_sem] = {"subjects": t_sub, "credits": t_cred}
+                
+                # Convert dict to df & save
+                df_targets = pd.DataFrame.from_dict(st.session_state.sem_targets, orient='index').reset_index().rename(columns={'index':'Semester'})
+                save_data("Targets", df_targets)
                 st.rerun()
     else:
         t_sub = st.session_state.sem_targets[current_sem]["subjects"]
@@ -358,6 +403,7 @@ elif page_selection == "📊 CGPA Tracker":
                     if st.form_submit_button("Add Subject Record"):
                         new_sub = pd.DataFrame([{"Semester": current_sem, "Code": c_code, "Subject": c_name, "Credit": c_cred, "Grade": c_grd, "Pointer": grade_map[c_grd]}])
                         st.session_state.cgpa_data = pd.concat([st.session_state.cgpa_data, new_sub], ignore_index=True)
+                        save_data("CGPA", st.session_state.cgpa_data)
                         st.rerun()
             else:
                 gpa_val = (df_sem['Pointer'] * df_sem['Credit']).sum() / df_sem['Credit'].sum() if df_sem['Credit'].sum() > 0 else 0.0
@@ -374,9 +420,14 @@ elif page_selection == "📊 CGPA Tracker":
                     try: st.image("cat_support.png", width=200)
                     except: pass
                     st.info(f"Alhamdulillah, finished with a {gpa_val:.2f}. Rest up, and let's push harder for the Dean's List next semester!")
+                
                 if st.button("Reset Semester Data", type="primary"):
                     st.session_state.cgpa_data = st.session_state.cgpa_data[st.session_state.cgpa_data['Semester'] != current_sem]
+                    save_data("CGPA", st.session_state.cgpa_data)
                     del st.session_state.sem_targets[current_sem]
+                    
+                    df_targets = pd.DataFrame.from_dict(st.session_state.sem_targets, orient='index').reset_index().rename(columns={'index':'Semester'})
+                    save_data("Targets", df_targets)
                     st.rerun()
         with tab_hist:
             st.dataframe(df_sem, hide_index=True, use_container_width=True)
